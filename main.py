@@ -162,16 +162,33 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         ]
         new_memories = await extract_memories(messages_for_extraction, existing_memories=existing_contents)
         
+        # 过滤垃圾记忆（不靠模型自觉，硬过滤）
+        META_BLACKLIST = [
+            "记忆库", "记忆系统", "检索", "没有被记录", "没有被提取",
+            "记忆遗漏", "尚未被记录", "写入不完整", "检索功能",
+            "系统没有返回", "关键词匹配", "语义匹配", "语义检索",
+            "阈值", "数据库", "seed", "导入", "部署",
+            "bug", "debug", "端口", "网关",
+        ]
+        
+        filtered_memories = []
         for mem in new_memories:
+            content = mem["content"]
+            if any(kw in content for kw in META_BLACKLIST):
+                print(f"🚫 过滤掉meta记忆: {content[:60]}...")
+                continue
+            filtered_memories.append(mem)
+        
+        for mem in filtered_memories:
             await save_memory(
                 content=mem["content"],
                 importance=mem["importance"],
                 source_session=session_id,
             )
         
-        if new_memories:
+        if filtered_memories:
             total = await get_all_memories_count()
-            print(f"💾 已保存 {len(new_memories)} 条新记忆，总计 {total} 条")
+            print(f"💾 已保存 {len(filtered_memories)} 条新记忆（过滤了 {len(new_memories) - len(filtered_memories)} 条），总计 {total} 条")
             
     except Exception as e:
         print(f"⚠️  后台记忆处理失败: {e}")
