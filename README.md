@@ -88,17 +88,15 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 | `MEMORY_MODEL` | 提取记忆用的模型（推荐便宜的小模型） | `anthropic/claude-haiku-4` |
 | `MAX_MEMORIES_INJECT` | 每次注入的最大记忆条数 | `15` |
 
-> ⚠️ Zeabur 的 PostgreSQL 需要 SSL 连接，记得在连接字符串末尾加 `?sslmode=require`
-
 **3. 重新部署**
 
-部署后访问 `/debug/memories`，看到 `"total_memories": 0` 就说明数据库连接成功。
+部署后访问 `https://你的网关地址.zeabur.app/debug/memories`，看到 `"total_memories": 0` 就说明数据库连接成功。
 
 **4. 导入预置记忆（可选）**
 
 1. 复制 `seed_memories_example.py` 为 `seed_memories.py`
 2. 修改里面的记忆条目，写入你想让 AI 一开始就知道的信息
-3. 部署后访问 `/import/seed-memories`，看到 `"status": "done"` 就导入成功了
+3. 部署后访问 `https://你的网关地址.zeabur.app/import/seed-memories`，看到 `"status": "done"` 就导入成功了
 
 ### 第三阶段：关闭记忆（应急）
 
@@ -140,6 +138,8 @@ ai-memory-gateway/
 | OpenAI | `https://api.openai.com/v1/chat/completions` |
 | Ollama（本地） | `http://localhost:11434/v1/chat/completions` |
 | 其他兼容服务 | 查阅对应文档 |
+
+> ⚠️ 部分 Gemini preview 模型（如 `gemini-3-flash-preview`）可能存在流式输出兼容性问题导致空回复，建议使用正式版模型（如 `gemini-2.5-flash`）。
 
 ## 💡 记忆系统原理
 
