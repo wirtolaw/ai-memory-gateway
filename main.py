@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count
+from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count, get_recent_memories
 from memory_extractor import extract_memories
 
 # ============================================================
@@ -152,11 +152,15 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         await save_message(session_id, "user", user_msg, model)
         await save_message(session_id, "assistant", assistant_msg, model)
         
+        # 获取已有记忆，传给提取模型做对比去重
+        existing = await get_recent_memories(limit=80)
+        existing_contents = [r["content"] for r in existing]
+        
         messages_for_extraction = [
             {"role": "user", "content": user_msg},
             {"role": "assistant", "content": assistant_msg},
         ]
-        new_memories = await extract_memories(messages_for_extraction)
+        new_memories = await extract_memories(messages_for_extraction, existing_memories=existing_contents)
         
         for mem in new_memories:
             await save_memory(
