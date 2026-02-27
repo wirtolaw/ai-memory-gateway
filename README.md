@@ -67,7 +67,7 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 **4. 连接客户端**
 
 以 Kelivo 为例：
-- API 地址填：`https://你的网关地址.zeabur.app/v1/chat/completions`
+- API 地址填：`https://你的网关地址.zeabur.app/v1`
 - API Key 填：随便填一个（网关会用自己的 key）
 - 模型填：你在 `DEFAULT_MODEL` 里设的模型
 
@@ -83,7 +83,7 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 
 | 环境变量 | 说明 | 示例 |
 |---------|------|------|
-| `DATABASE_URL` | PostgreSQL 连接字符串 | `postgresql://user:pass@host:port/db?sslmode=require` |
+| `DATABASE_URL` | PostgreSQL 连接字符串 | `postgresql://user:pass@host:port/db` |
 | `MEMORY_ENABLED` | 开启记忆 | `true` |
 | `MEMORY_MODEL` | 提取记忆用的模型（推荐便宜的小模型） | `anthropic/claude-haiku-4` |
 | `MAX_MEMORIES_INJECT` | 每次注入的最大记忆条数 | `15` |
