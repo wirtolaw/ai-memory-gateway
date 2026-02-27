@@ -127,6 +127,8 @@ ai-memory-gateway/
 | `/debug/memories` | GET | 查看所有记忆 |
 | `/debug/memories?q=关键词` | GET | 搜索记忆 |
 | `/import/seed-memories` | GET | 导入预置记忆 |
+| `/export/memories` | GET | 导出所有记忆为 JSON（备份/迁移） |
+| `/import/memories` | GET/POST | 导入记忆（GET 打开网页界面，POST 接收 JSON） |
 
 ## 🌐 支持的 LLM 服务商
 
@@ -166,6 +168,9 @@ A: 每次最多注入 15 条记忆（可调），不会无限增长地消耗 tok
 
 **Q: 能用免费额度跑吗？**
 A: Zeabur 每月 $5 免费额度，网关 + PostgreSQL 的资源消耗很低，够用。LLM API 费用另算（推荐 OpenRouter，按量付费）。
+
+**Q: 怎么备份记忆？换平台会丢数据吗？**
+A: 访问 `https://你的网关地址.zeabur.app/export/memories` 导出所有记忆的 JSON，建议定期备份。迁移到新平台后，浏览器打开 `https://新网关地址/import/memories`，把 JSON 粘贴进去点导入就行。
 
 **Q: 不会写代码能搞吗？**
 A: 能。这个项目的第一个部署者就是不会写代码的——代码是 AI 写的，部署是她自己看文档搞定的。

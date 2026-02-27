@@ -19,9 +19,9 @@ import asyncio
 import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 
-from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count, get_recent_memories
+from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count, get_recent_memories, get_all_memories, get_pool
 from memory_extractor import extract_memories
 
 # ============================================================
@@ -398,6 +398,142 @@ async def import_seed_memories():
         return result
     except ImportError:
         return {"error": "未找到 seed_memories.py，请参考 seed_memories_example.py 创建"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/export/memories")
+async def export_memories():
+    """
+    导出所有记忆为 JSON（用于备份或迁移）
+    浏览器访问这个地址就会返回所有记忆数据
+    """
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
+    
+    try:
+        memories = await get_all_memories()
+        # 把 datetime 转成字符串
+        for mem in memories:
+            if mem.get("created_at"):
+                mem["created_at"] = str(mem["created_at"])
+        
+        return {
+            "total": len(memories),
+            "exported_at": str(__import__("datetime").datetime.now()),
+            "memories": memories,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/import/memories", response_class=HTMLResponse)
+async def import_memories_page():
+    """导入记忆的网页界面"""
+    if not MEMORY_ENABLED:
+        return HTMLResponse("<h3>记忆系统未启用（设置 MEMORY_ENABLED=true 开启）</h3>")
+    
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8"><title>导入记忆</title>
+    <style>
+        body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+        textarea { width: 100%; height: 200px; font-size: 14px; margin: 10px 0; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #45a049; }
+        input[type="file"] { margin: 10px 0; font-size: 14px; }
+        #result { margin-top: 15px; padding: 10px; white-space: pre-wrap; }
+        .ok { background: #e8f5e9; } .err { background: #ffebee; }
+        .divider { margin: 20px 0; text-align: center; color: #999; }
+    </style></head><body>
+    <h2>📥 导入记忆</h2>
+    <p><b>方式一：</b>上传从 <code>/export/memories</code> 保存的 JSON 文件</p>
+    <input type="file" id="file" accept=".json">
+    <div class="divider">—— 或者 ——</div>
+    <p><b>方式二：</b>直接粘贴 JSON</p>
+    <textarea id="json" placeholder='粘贴导出的 JSON'></textarea>
+    <br><button onclick="doImport()">导入</button>
+    <div id="result"></div>
+    <script>
+    async function doImport() {
+        const r = document.getElementById('result');
+        const file = document.getElementById('file').files[0];
+        const text = document.getElementById('json').value.trim();
+        
+        let jsonStr = '';
+        if (file) {
+            jsonStr = await file.text();
+        } else if (text) {
+            jsonStr = text;
+        } else {
+            r.className = 'err'; r.textContent = '请先上传文件或粘贴 JSON'; return;
+        }
+        
+        try {
+            const parsed = JSON.parse(jsonStr);
+            r.className = ''; r.textContent = '导入中...';
+            const resp = await fetch('/import/memories', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(parsed)
+            });
+            const data = await resp.json();
+            if (data.error) { r.className = 'err'; r.textContent = '❌ ' + data.error; }
+            else { r.className = 'ok'; r.textContent = '✅ 导入完成！新增 ' + data.imported + ' 条，跳过 ' + data.skipped + ' 条（已存在），总计 ' + data.total + ' 条'; }
+        } catch(e) { r.className = 'err'; r.textContent = '❌ JSON 格式错误：' + e.message; }
+    }
+    </script></body></html>
+    """)
+
+
+
+@app.post("/import/memories")
+async def import_memories(request: Request):
+    """
+    从 JSON 导入记忆（用于迁移或恢复备份）
+    接受 /export/memories 导出的格式，自动跳过已存在的记忆
+    """
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
+    
+    try:
+        data = await request.json()
+        memories = data.get("memories", [])
+        
+        if not memories:
+            return {"error": "没有找到记忆数据，请确认 JSON 格式正确"}
+        
+        imported = 0
+        skipped = 0
+        
+        for mem in memories:
+            content = mem.get("content", "")
+            if not content:
+                continue
+            
+            # 检查是否已存在
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE content = $1", content
+                )
+            
+            if existing > 0:
+                skipped += 1
+                continue
+            
+            await save_memory(
+                content=content,
+                importance=mem.get("importance", 5),
+                source_session=mem.get("source_session", "json-import"),
+            )
+            imported += 1
+        
+        total = await get_all_memories_count()
+        return {
+            "status": "done",
+            "imported": imported,
+            "skipped": skipped,
+            "total": total,
+        }
     except Exception as e:
         return {"error": str(e)}
 

@@ -268,3 +268,13 @@ async def get_all_memories_count():
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM memories")
         return row["cnt"]
+
+
+async def get_all_memories():
+    """导出所有记忆（用于备份）"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT content, importance, source_session, created_at FROM memories ORDER BY id"
+        )
+        return [dict(r) for r in rows]
