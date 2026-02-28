@@ -21,8 +21,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 
-from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count, get_recent_memories, get_all_memories, get_pool
-from memory_extractor import extract_memories
+from database import init_tables, close_pool, save_message, search_memories, save_memory, get_all_memories_count, get_recent_memories, get_all_memories, get_pool, get_all_memories_detail, update_memory, delete_memory, delete_memories_batch
+from memory_extractor import extract_memories, score_memories
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
@@ -434,63 +434,448 @@ async def import_memories_page():
         return HTMLResponse("<h3>记忆系统未启用（设置 MEMORY_ENABLED=true 开启）</h3>")
     
     return HTMLResponse("""
-    <!DOCTYPE html>
-    <html><head><meta charset="utf-8"><title>导入记忆</title>
-    <style>
-        body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
-        textarea { width: 100%; height: 200px; font-size: 14px; margin: 10px 0; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; }
-        button:hover { background: #45a049; }
-        input[type="file"] { margin: 10px 0; font-size: 14px; }
-        #result { margin-top: 15px; padding: 10px; white-space: pre-wrap; }
-        .ok { background: #e8f5e9; } .err { background: #ffebee; }
-        .divider { margin: 20px 0; text-align: center; color: #999; }
-    </style></head><body>
-    <h2>📥 导入记忆</h2>
-    <p><b>方式一：</b>上传从 <code>/export/memories</code> 保存的 JSON 文件</p>
-    <input type="file" id="file" accept=".json">
-    <div class="divider">—— 或者 ——</div>
-    <p><b>方式二：</b>直接粘贴 JSON</p>
-    <textarea id="json" placeholder='粘贴导出的 JSON'></textarea>
-    <br><button onclick="doImport()">导入</button>
-    <div id="result"></div>
-    <script>
-    async function doImport() {
-        const r = document.getElementById('result');
-        const file = document.getElementById('file').files[0];
-        const text = document.getElementById('json').value.trim();
-        
-        let jsonStr = '';
-        if (file) {
-            jsonStr = await file.text();
-        } else if (text) {
-            jsonStr = text;
-        } else {
-            r.className = 'err'; r.textContent = '请先上传文件或粘贴 JSON'; return;
-        }
-        
-        try {
-            const parsed = JSON.parse(jsonStr);
-            r.className = ''; r.textContent = '导入中...';
-            const resp = await fetch('/import/memories', {
-                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(parsed)
-            });
-            const data = await resp.json();
-            if (data.error) { r.className = 'err'; r.textContent = '❌ ' + data.error; }
-            else { r.className = 'ok'; r.textContent = '✅ 导入完成！新增 ' + data.imported + ' 条，跳过 ' + data.skipped + ' 条（已存在），总计 ' + data.total + ' 条'; }
-        } catch(e) { r.className = 'err'; r.textContent = '❌ JSON 格式错误：' + e.message; }
-    }
-    </script></body></html>
-    """)
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>导入记忆</title>
+<style>
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+    textarea { width: 100%%; height: 200px; font-size: 14px; margin: 10px 0; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; margin-right: 8px; }
+    button:hover { background: #45a049; }
+    input[type="file"] { margin: 10px 0; font-size: 14px; }
+    #result { margin-top: 15px; padding: 10px; white-space: pre-wrap; }
+    .ok { background: #e8f5e9; } .err { background: #ffebee; } .info { background: #e3f2fd; }
+    .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #eee; }
+    .tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; color: #666; }
+    .tab.active { border-bottom-color: #4CAF50; color: #333; font-weight: bold; }
+    .panel { display: none; } .panel.active { display: block; }
+    .hint { color: #888; font-size: 13px; margin: 5px 0; }
+    label { cursor: pointer; }
+    .preview { background: #f5f5f5; border: 1px solid #ddd; padding: 10px; margin: 10px 0; max-height: 200px; overflow-y: auto; font-size: 13px; }
+    .preview-item { padding: 3px 0; border-bottom: 1px solid #eee; }
+    .nav { margin-bottom: 15px; font-size: 14px; color: #666; }
+    .nav a { color: #4CAF50; text-decoration: none; }
+</style></head><body>
+<h2>📥 导入记忆</h2>
+<div class="nav"><a href="/manage/memories">→ 管理已有记忆</a></div>
 
+<div class="tabs">
+    <div class="tab active" onclick="switchTab('text')">纯文本导入</div>
+    <div class="tab" onclick="switchTab('json')">JSON 备份恢复</div>
+</div>
+
+<div id="panel-text" class="panel active">
+    <p>上传 <b>.txt 文件</b>（每行一条记忆），或直接在下方输入。</p>
+    <p class="hint">示例：一行写一条，比如 "用户的名字叫小花"、"用户喜欢吃火锅"</p>
+    <input type="file" id="txtFile" accept=".txt">
+    <div style="margin: 15px 0; text-align: center; color: #999;">—— 或者直接输入 ——</div>
+    <textarea id="txtInput" placeholder="每行一条记忆，例如：&#10;用户的名字叫小花&#10;用户喜欢吃火锅&#10;用户养了一只狗叫豆豆"></textarea>
+    <p><label><input type="checkbox" id="skipScore"> 跳过自动评分（所有记忆默认权重 5，不消耗 API 额度）</label></p>
+    <button onclick="doTextImport()">导入</button>
+</div>
+
+<div id="panel-json" class="panel">
+    <p>上传从 <code>/export/memories</code> 保存的 <b>.json 文件</b>，用于备份恢复或平台迁移。</p>
+    <input type="file" id="jsonFile" accept=".json">
+    <div style="margin: 15px 0; text-align: center; color: #999;">—— 或者直接粘贴 ——</div>
+    <textarea id="jsonInput" placeholder="粘贴导出的 JSON"></textarea>
+    <br><button onclick="previewJson()">预览</button>
+    <div id="jsonPreview"></div>
+</div>
+
+<div id="result"></div>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('panel-' + name).classList.add('active');
+    document.getElementById('result').textContent = '';
+    document.getElementById('result').className = '';
+    document.getElementById('jsonPreview').innerHTML = '';
+}
+
+async function doTextImport() {
+    const r = document.getElementById('result');
+    const file = document.getElementById('txtFile').files[0];
+    const text = document.getElementById('txtInput').value.trim();
+    const skip = document.getElementById('skipScore').checked;
+    
+    let content = '';
+    if (file) { content = await file.text(); }
+    else if (text) { content = text; }
+    else { r.className = 'err'; r.textContent = '请先上传文件或输入文本'; return; }
+    
+    const lines = content.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) { r.className = 'err'; r.textContent = '没有找到有效的记忆条目'; return; }
+    
+    r.className = 'info';
+    r.textContent = skip ? '正在导入 ' + lines.length + ' 条记忆...' : '正在为 ' + lines.length + ' 条记忆自动评分，请稍候...';
+    
+    try {
+        const resp = await fetch('/import/text', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({lines: lines, skip_scoring: skip})
+        });
+        const data = await resp.json();
+        if (data.error) { r.className = 'err'; r.textContent = '❌ ' + data.error; }
+        else { r.className = 'ok'; r.textContent = '✅ 导入完成！新增 ' + data.imported + ' 条，跳过 ' + data.skipped + ' 条（已存在），总计 ' + data.total + ' 条'; }
+    } catch(e) { r.className = 'err'; r.textContent = '❌ 请求失败：' + e.message; }
+}
+
+let pendingJsonData = null;
+
+async function previewJson() {
+    const r = document.getElementById('result');
+    const p = document.getElementById('jsonPreview');
+    const file = document.getElementById('jsonFile').files[0];
+    const text = document.getElementById('jsonInput').value.trim();
+    
+    let jsonStr = '';
+    if (file) { jsonStr = await file.text(); }
+    else if (text) { jsonStr = text; }
+    else { r.className = 'err'; r.textContent = '请先上传文件或粘贴 JSON'; return; }
+    
+    try {
+        const parsed = JSON.parse(jsonStr);
+        const mems = parsed.memories || [];
+        if (mems.length === 0) { r.className = 'err'; r.textContent = '❌ 没有找到 memories 字段，请确认这是从 /export/memories 导出的文件'; p.innerHTML = ''; return; }
+        
+        pendingJsonData = parsed;
+        let html = '<p><b>预览：共 ' + mems.length + ' 条记忆</b></p>';
+        const show = mems.slice(0, 10);
+        show.forEach(m => { html += '<div class="preview-item">权重 ' + (m.importance || '?') + ' | ' + (m.content || '').substring(0, 80) + '</div>'; });
+        if (mems.length > 10) html += '<div class="preview-item" style="color:#999;">...还有 ' + (mems.length - 10) + ' 条</div>';
+        html += '<br><button onclick="confirmJsonImport()">确认导入</button>';
+        p.innerHTML = html;
+        r.textContent = ''; r.className = '';
+    } catch(e) { r.className = 'err'; r.textContent = '❌ JSON 格式错误：' + e.message; p.innerHTML = ''; }
+}
+
+async function confirmJsonImport() {
+    const r = document.getElementById('result');
+    if (!pendingJsonData) { r.className = 'err'; r.textContent = '请先预览'; return; }
+    
+    r.className = 'info'; r.textContent = '导入中...';
+    try {
+        const resp = await fetch('/import/memories', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(pendingJsonData)
+        });
+        const data = await resp.json();
+        if (data.error) { r.className = 'err'; r.textContent = '❌ ' + data.error; }
+        else { r.className = 'ok'; r.textContent = '✅ 导入完成！新增 ' + data.imported + ' 条，跳过 ' + data.skipped + ' 条（已存在），总计 ' + data.total + ' 条'; }
+        document.getElementById('jsonPreview').innerHTML = '';
+        pendingJsonData = null;
+    } catch(e) { r.className = 'err'; r.textContent = '❌ 请求失败：' + e.message; }
+}
+</script></body></html>
+""")
+
+
+@app.get("/manage/memories", response_class=HTMLResponse)
+async def manage_memories_page():
+    """记忆管理页面"""
+    if not MEMORY_ENABLED:
+        return HTMLResponse("<h3>记忆系统未启用（设置 MEMORY_ENABLED=true 开启）</h3>")
+    
+    return HTMLResponse("""
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>管理记忆</title>
+<style>
+    body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
+    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 15px; flex-wrap: wrap; }
+    input[type="text"] { padding: 8px 12px; font-size: 14px; border: 1px solid #ddd; border-radius: 4px; width: 250px; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; border-radius: 4px; }
+    .btn-green { background: #4CAF50; color: white; } .btn-green:hover { background: #45a049; }
+    .btn-red { background: #f44336; color: white; } .btn-red:hover { background: #d32f2f; }
+    .btn-gray { background: #9e9e9e; color: white; } .btn-gray:hover { background: #757575; }
+    table { width: 100%%; border-collapse: collapse; font-size: 14px; }
+    th { background: #f5f5f5; padding: 10px 8px; text-align: left; border-bottom: 2px solid #ddd; position: sticky; top: 0; }
+    td { padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+    tr:hover { background: #fafafa; }
+    .content-cell { max-width: 450px; word-break: break-all; }
+    .importance-input { width: 45px; padding: 4px; text-align: center; border: 1px solid #ddd; border-radius: 3px; }
+    .content-input { width: 100%%; padding: 4px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; min-height: 40px; resize: vertical; }
+    .actions button { padding: 4px 8px; font-size: 12px; margin: 2px; }
+    .msg { padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+    .ok { background: #e8f5e9; } .err { background: #ffebee; } .info { background: #e3f2fd; }
+    .stats { color: #666; font-size: 14px; margin-bottom: 10px; }
+    .nav { margin-bottom: 15px; font-size: 14px; color: #666; }
+    .nav a { color: #4CAF50; text-decoration: none; }
+    .check-col { width: 30px; text-align: center; }
+    .id-col { width: 40px; }
+    .imp-col { width: 60px; }
+    .source-col { width: 90px; font-size: 12px; color: #888; }
+    .actions-col { width: 120px; }
+</style></head><body>
+<h2>🧠 记忆管理</h2>
+<div class="nav"><a href="/import/memories">→ 导入新记忆</a> ｜ <a href="/export/memories">→ 导出备份</a></div>
+
+<div class="toolbar">
+    <input type="text" id="searchBox" placeholder="搜索记忆..." oninput="filterTable()">
+    <button class="btn-green" onclick="batchSave()">批量保存全部</button>
+    <button class="btn-red" onclick="batchDelete()">批量删除选中</button>
+    <label style="font-size:13px;color:#666;cursor:pointer;"><input type="checkbox" id="selectAll" onchange="toggleAll()"> 全选</label>
+</div>
+<div id="msg"></div>
+<div class="stats" id="stats"></div>
+<div style="overflow-x: auto;">
+<table>
+    <thead><tr>
+        <th class="check-col"><input type="checkbox" id="selectAllHead" onchange="toggleAll()"></th>
+        <th class="id-col">ID</th>
+        <th>内容</th>
+        <th class="imp-col">权重</th>
+        <th class="source-col">来源</th>
+        <th class="actions-col">操作</th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+</table>
+</div>
+
+<script>
+let allMemories = [];
+
+async function loadMemories() {
+    try {
+        const resp = await fetch('/api/memories');
+        const data = await resp.json();
+        allMemories = data.memories || [];
+        document.getElementById('stats').textContent = '共 ' + allMemories.length + ' 条记忆';
+        renderTable(allMemories);
+    } catch(e) { showMsg('err', '加载失败：' + e.message); }
+}
+
+function renderTable(mems) {
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = mems.map(m => '<tr data-id="' + m.id + '">' +
+        '<td class="check-col"><input type="checkbox" class="mem-check" value="' + m.id + '"></td>' +
+        '<td class="id-col">' + m.id + '</td>' +
+        '<td class="content-cell"><textarea class="content-input" id="c_' + m.id + '">' + escHtml(m.content) + '</textarea></td>' +
+        '<td><input type="number" class="importance-input" id="i_' + m.id + '" value="' + m.importance + '" min="1" max="10"></td>' +
+        '<td class="source-col">' + (m.source_session || '-') + '</td>' +
+        '<td class="actions"><button class="btn-green" onclick="saveMem(' + m.id + ')">保存</button><button class="btn-red" onclick="delMem(' + m.id + ')">删除</button></td>' +
+        '</tr>').join('');
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function filterTable() {
+    const q = document.getElementById('searchBox').value.trim().toLowerCase();
+    if (!q) { renderTable(allMemories); return; }
+    const filtered = allMemories.filter(m => m.content.toLowerCase().includes(q));
+    renderTable(filtered);
+    document.getElementById('stats').textContent = '搜索到 ' + filtered.length + ' / ' + allMemories.length + ' 条';
+}
+
+async function saveMem(id) {
+    const content = document.getElementById('c_' + id).value;
+    const importance = parseInt(document.getElementById('i_' + id).value);
+    try {
+        const resp = await fetch('/api/memories/' + id, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({content, importance})
+        });
+        const data = await resp.json();
+        if (data.error) showMsg('err', '❌ ' + data.error);
+        else { showMsg('ok', '✅ 已保存 #' + id); loadMemories(); }
+    } catch(e) { showMsg('err', '❌ ' + e.message); }
+}
+
+async function delMem(id) {
+    if (!confirm('确定删除 #' + id + '？此操作不可撤销。')) return;
+    try {
+        const resp = await fetch('/api/memories/' + id, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.error) showMsg('err', '❌ ' + data.error);
+        else { showMsg('ok', '✅ 已删除 #' + id); loadMemories(); }
+    } catch(e) { showMsg('err', '❌ ' + e.message); }
+}
+
+async function batchSave() {
+    const rows = document.querySelectorAll('#tbody tr');
+    if (rows.length === 0) { showMsg('err', '没有记忆可保存'); return; }
+    const updates = [];
+    rows.forEach(row => {
+        const id = parseInt(row.dataset.id);
+        const cEl = document.getElementById('c_' + id);
+        const iEl = document.getElementById('i_' + id);
+        if (cEl && iEl) updates.push({id, content: cEl.value, importance: parseInt(iEl.value)});
+    });
+    if (!confirm('确定保存全部 ' + updates.length + ' 条记忆的修改？')) return;
+    try {
+        const resp = await fetch('/api/memories/batch-update', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({updates: updates})
+        });
+        const data = await resp.json();
+        if (data.error) showMsg('err', '❌ ' + data.error);
+        else { showMsg('ok', '✅ 已保存 ' + data.updated + ' 条'); loadMemories(); }
+    } catch(e) { showMsg('err', '❌ ' + e.message); }
+}
+
+async function batchDelete() {
+    const checked = [...document.querySelectorAll('.mem-check:checked')].map(c => parseInt(c.value));
+    if (checked.length === 0) { showMsg('err', '请先勾选要删除的记忆'); return; }
+    if (!confirm('确定删除选中的 ' + checked.length + ' 条记忆？此操作不可撤销。')) return;
+    try {
+        const resp = await fetch('/api/memories/batch-delete', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ids: checked})
+        });
+        const data = await resp.json();
+        if (data.error) showMsg('err', '❌ ' + data.error);
+        else { showMsg('ok', '✅ 已删除 ' + data.deleted + ' 条'); loadMemories(); }
+    } catch(e) { showMsg('err', '❌ ' + e.message); }
+}
+
+function toggleAll() {
+    const val = event.target.checked;
+    document.querySelectorAll('.mem-check').forEach(c => c.checked = val);
+    document.getElementById('selectAll').checked = val;
+    document.getElementById('selectAllHead').checked = val;
+}
+
+function showMsg(cls, text) {
+    const el = document.getElementById('msg');
+    el.className = 'msg ' + cls;
+    el.textContent = text;
+    setTimeout(() => { el.textContent = ''; el.className = ''; }, 4000);
+}
+
+loadMemories();
+</script></body></html>
+""")
+
+
+# ============================================================
+# 管理 API
+# ============================================================
+
+@app.get("/api/memories")
+async def api_get_memories():
+    """获取所有记忆（管理页面用）"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用"}
+    memories = await get_all_memories_detail()
+    for m in memories:
+        if m.get("created_at"):
+            m["created_at"] = str(m["created_at"])
+    return {"memories": memories}
+
+
+@app.put("/api/memories/{memory_id}")
+async def api_update_memory(memory_id: int, request: Request):
+    """更新单条记忆"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用"}
+    data = await request.json()
+    await update_memory(
+        memory_id,
+        content=data.get("content"),
+        importance=data.get("importance"),
+    )
+    return {"status": "ok", "id": memory_id}
+
+
+@app.delete("/api/memories/{memory_id}")
+async def api_delete_memory(memory_id: int):
+    """删除单条记忆"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用"}
+    await delete_memory(memory_id)
+    return {"status": "ok", "id": memory_id}
+
+
+@app.post("/api/memories/batch-update")
+async def api_batch_update(request: Request):
+    """批量更新记忆"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用"}
+    data = await request.json()
+    updates = data.get("updates", [])
+    if not updates:
+        return {"error": "没有要更新的记忆"}
+    for item in updates:
+        await update_memory(
+            item["id"],
+            content=item.get("content"),
+            importance=item.get("importance"),
+        )
+    return {"status": "ok", "updated": len(updates)}
+
+
+@app.post("/api/memories/batch-delete")
+async def api_batch_delete(request: Request):
+    """批量删除记忆"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用"}
+    data = await request.json()
+    ids = data.get("ids", [])
+    if not ids:
+        return {"error": "未选择记忆"}
+    await delete_memories_batch(ids)
+    return {"status": "ok", "deleted": len(ids)}
+
+
+@app.post("/import/text")
+async def import_text_memories(request: Request):
+    """从纯文本导入记忆（每行一条），可选自动评分"""
+    if not MEMORY_ENABLED:
+        return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
+    
+    try:
+        data = await request.json()
+        lines = data.get("lines", [])
+        skip_scoring = data.get("skip_scoring", False)
+        
+        if not lines:
+            return {"error": "没有找到记忆条目"}
+        
+        if skip_scoring:
+            scored = [{"content": t, "importance": 5} for t in lines]
+        else:
+            scored = await score_memories(lines)
+        
+        imported = 0
+        skipped = 0
+        
+        for mem in scored:
+            content = mem.get("content", "")
+            if not content:
+                continue
+            
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE content = $1", content
+                )
+            
+            if existing > 0:
+                skipped += 1
+                continue
+            
+            await save_memory(
+                content=content,
+                importance=mem.get("importance", 5),
+                source_session="text-import",
+            )
+            imported += 1
+        
+        total = await get_all_memories_count()
+        return {
+            "status": "done",
+            "imported": imported,
+            "skipped": skipped,
+            "total": total,
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/import/memories")
 async def import_memories(request: Request):
-    """
-    从 JSON 导入记忆（用于迁移或恢复备份）
-    接受 /export/memories 导出的格式，自动跳过已存在的记忆
-    """
+    """从 JSON 导入记忆（用于迁移或恢复备份）"""
     if not MEMORY_ENABLED:
         return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
     
@@ -509,7 +894,6 @@ async def import_memories(request: Request):
             if not content:
                 continue
             
-            # 检查是否已存在
             pool = await get_pool()
             async with pool.acquire() as conn:
                 existing = await conn.fetchval(
@@ -538,8 +922,6 @@ async def import_memories(request: Request):
         return {"error": str(e)}
 
 
-# ============================================================
-# 启动入口
 # ============================================================
 
 if __name__ == "__main__":
