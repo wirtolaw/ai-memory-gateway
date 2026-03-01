@@ -268,3 +268,60 @@ async def get_all_memories_count():
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM memories")
         return row["cnt"]
+
+
+async def get_all_memories():
+    """导出所有记忆（用于备份）"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT content, importance, source_session, created_at FROM memories ORDER BY id"
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_all_memories_detail():
+    """获取所有记忆（含 id，用于管理页面）"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, content, importance, source_session, created_at FROM memories ORDER BY id"
+        )
+        return [dict(r) for r in rows]
+
+
+async def update_memory(memory_id: int, content: str = None, importance: int = None):
+    """更新单条记忆"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if content is not None and importance is not None:
+            await conn.execute(
+                "UPDATE memories SET content = $1, importance = $2 WHERE id = $3",
+                content, importance, memory_id
+            )
+        elif content is not None:
+            await conn.execute(
+                "UPDATE memories SET content = $1 WHERE id = $2",
+                content, memory_id
+            )
+        elif importance is not None:
+            await conn.execute(
+                "UPDATE memories SET importance = $1 WHERE id = $2",
+                importance, memory_id
+            )
+
+
+async def delete_memory(memory_id: int):
+    """删除单条记忆"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM memories WHERE id = $1", memory_id)
+
+
+async def delete_memories_batch(memory_ids: list):
+    """批量删除记忆"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM memories WHERE id = ANY($1::int[])", memory_ids
+        )

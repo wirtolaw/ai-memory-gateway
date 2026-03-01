@@ -59,7 +59,7 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 |---------|------|------|
 | `API_KEY` | 你的 LLM API Key | `sk-or-v1-xxxx`（OpenRouter）|
 | `API_BASE_URL` | LLM API 地址 | `https://openrouter.ai/api/v1/chat/completions` |
-| `DEFAULT_MODEL` | 默认模型 | `anthropic/claude-sonnet-4` |
+| `DEFAULT_MODEL` | 默认模型 | `anthropic/claude-sonnet-4.5` |
 | `PORT` | 端口 | `8080` |
 
 5. 部署，访问你的网关地址看到 `{"status":"running"}` 就成功了
@@ -85,7 +85,7 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 |---------|------|------|
 | `DATABASE_URL` | PostgreSQL 连接字符串 | `postgresql://user:pass@host:port/db` |
 | `MEMORY_ENABLED` | 开启记忆 | `true` |
-| `MEMORY_MODEL` | 提取记忆用的模型（推荐便宜的小模型） | `anthropic/claude-haiku-4` |
+| `MEMORY_MODEL` | 提取记忆用的模型（推荐便宜的小模型） | `anthropic/claude-haiku-4.5` |
 | `MAX_MEMORIES_INJECT` | 每次注入的最大记忆条数 | `15` |
 
 **3. 重新部署**
@@ -94,9 +94,16 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 
 **4. 导入预置记忆（可选）**
 
+**方式一（推荐，不用碰代码）：** 写一个 `.txt` 文件，每行一条你想让 AI 知道的信息，然后打开 `https://你的网关地址.zeabur.app/import/memories`，在"纯文本导入"标签页上传文件，系统会自动评估每条记忆的重要程度并导入。也可以勾选"跳过自动评分"节省 API 额度，之后在管理页面手动调整权重。
+
+**方式二（代码方式，开发者用）：**
 1. 复制 `seed_memories_example.py` 为 `seed_memories.py`
 2. 修改里面的记忆条目，写入你想让 AI 一开始就知道的信息
 3. 部署后访问 `https://你的网关地址.zeabur.app/import/seed-memories`，看到 `"status": "done"` 就导入成功了
+
+**5. 管理记忆（可选）**
+
+打开 `https://你的网关地址.zeabur.app/manage/memories` 可以查看所有记忆，支持搜索、编辑内容、调整权重、单条删除和批量删除、批量保存。
 
 ### 第三阶段：关闭记忆（应急）
 
@@ -126,7 +133,10 @@ ai-memory-gateway/
 | `/v1/models` | GET | 模型列表 |
 | `/debug/memories` | GET | 查看所有记忆 |
 | `/debug/memories?q=关键词` | GET | 搜索记忆 |
-| `/import/seed-memories` | GET | 导入预置记忆 |
+| `/import/memories` | GET/POST | 记忆导入页面（支持纯文本自动评分 / JSON备份恢复） |
+| `/manage/memories` | GET | 记忆管理页面（查看、搜索、编辑、删除） |
+| `/export/memories` | GET | 导出所有记忆为 JSON（备份/迁移） |
+| `/import/seed-memories` | GET | 执行预置记忆导入（开发者用） |
 
 ## 🌐 支持的 LLM 服务商
 
@@ -166,6 +176,9 @@ A: 每次最多注入 15 条记忆（可调），不会无限增长地消耗 tok
 
 **Q: 能用免费额度跑吗？**
 A: Zeabur 每月 $5 免费额度，网关 + PostgreSQL 的资源消耗很低，够用。LLM API 费用另算（推荐 OpenRouter，按量付费）。
+
+**Q: 怎么备份记忆？换平台会丢数据吗？**
+A: 访问 `https://你的网关地址.zeabur.app/export/memories` 导出所有记忆的 JSON，建议定期备份。迁移到新平台后，浏览器打开 `https://新网关地址/import/memories`，在"JSON 备份恢复"标签页上传导出的文件即可。
 
 **Q: 不会写代码能搞吗？**
 A: 能。这个项目的第一个部署者就是不会写代码的——代码是 AI 写的，部署是她自己看文档搞定的。

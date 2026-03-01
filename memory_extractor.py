@@ -167,3 +167,84 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
     except Exception as e:
         print(f"⚠️  记忆提取出错: {e}")
         return []
+
+
+SCORING_PROMPT = """你是记忆重要性评分专家。请对以下记忆条目逐条评分。
+
+# 评分规则（1-10）
+- 9-10：核心身份信息（名字、生日、职业、重要关系）
+- 7-8：重要偏好、重大事件、深层情感
+- 5-6：日常习惯、一般偏好
+- 3-4：临时状态、偶然提及
+- 1-2：琐碎信息
+
+# 输入记忆
+{memories_text}
+
+# 输出格式
+返回 JSON 数组，每条包含原文和评分：
+[{{"content": "原文", "importance": 评分数字}}]
+
+只返回 JSON，不要其他文字。"""
+
+
+async def score_memories(texts: List[str]) -> List[Dict]:
+    """对纯文本记忆条目批量评分"""
+    if not texts:
+        return []
+
+    memories_text = "\n".join(f"- {t}" for t in texts)
+    prompt = SCORING_PROMPT.format(memories_text=memories_text)
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                API_BASE_URL,
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": MEMORY_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": 4000,
+                },
+            )
+
+            if response.status_code != 200:
+                print(f"⚠️  记忆评分请求失败: {response.status_code}")
+                # 失败时返回默认分数
+                return [{"content": t, "importance": 5} for t in texts]
+
+            data = response.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+            memories = json.loads(text)
+
+            if not isinstance(memories, list):
+                return [{"content": t, "importance": 5} for t in texts]
+
+            valid = []
+            for mem in memories:
+                if isinstance(mem, dict) and "content" in mem:
+                    valid.append({
+                        "content": str(mem["content"]),
+                        "importance": int(mem.get("importance", 5)),
+                    })
+
+            print(f"📝 为 {len(valid)} 条记忆完成自动评分")
+            return valid
+
+    except Exception as e:
+        print(f"⚠️  记忆评分出错: {e}")
+        return [{"content": t, "importance": 5} for t in texts]
